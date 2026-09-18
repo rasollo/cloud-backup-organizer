@@ -50,6 +50,19 @@ export zips (iCloud / Google Takeout / OneDrive, on N drives)
         │
         ▼
    by-date/YYYY/MM/... ──────► point Immich's External Library at this
+
+ Two more passes worth running over whatever landed in by-date/sem-data/
+ (files with no EXIF and no usable date in the filename):
+
+ 11. recover_undated_photos.py  pull out the photos that are actually
+                       worth keeping among the "no date" pile, using GPS
+                       and sibling dates as weak signals (see below)
+ 12. dedupe_visual_global.py  catch near-duplicates that don't share a
+                       filename at all — the same photo forwarded several
+                       times through a messaging app, each copy renamed
+                       to a fresh UUID (dedupe_visual.py can't catch these:
+                       it only ever compares files that already share a
+                       base name)
 ```
 
 Every step is:
@@ -136,6 +149,17 @@ python3 detect_photoslibrary_internals.py --manifest ../reports/manifest.csv --o
 #    --organized makes it check the CURRENT (post-organize.py) path
 #    instead of the pre-organize extraction path.
 python3 validate_sample.py --manifest ../reports/manifest.csv --organized ../reports/organized.csv --sample-size 100
+
+# 7. Optional: dig through by-date/sem-data/ for real photos worth
+#    recovering (see "Finding real photos in the undated pile" below),
+#    then check the recovered pile itself for hidden duplication.
+python3 recover_undated_photos.py \
+  --root /mnt/photo-library/by-date/sem-data \
+  --manifest ../reports/manifest.csv --organized ../reports/organized.csv \
+  --review-dir /mnt/photo-library/review-recovered
+python3 dedupe_visual_global.py \
+  --root /mnt/photo-library/review-recovered \
+  --review-dir /mnt/photo-library/review-recovered/_duplicatas-internas
 ```
 
 Then point Immich at `/mnt/photo-library/by-date` as a **read-only External
@@ -171,6 +195,35 @@ half-measure. `write_exif_dates.py` is the real fix: it writes the
 filename-derived date as actual EXIF tags into the file, at which point
 it behaves exactly like a native EXIF file — permanent, and immune to
 every future re-scan.
+
+## Finding real photos in the undated pile
+
+`organize.py` dumps anything with no EXIF and no parseable filename date
+into `by-date/sem-data/`. In a messy real-world library that pile is mostly
+junk (icons, stickers, screenshots), but it's not *all* junk — messaging
+apps strip EXIF from everything, so real photos shared over WhatsApp/
+Telegram end up in there too, indistinguishable from the junk by filename
+alone (usually a random UUID).
+
+`recover_undated_photos.py` pulls the worthwhile files out using three
+weak signals, from most to least trustworthy:
+
+1. **GPS is still present.** Some messaging apps strip the capture date
+   but leave GPS tags alone. A photo with coordinates is real, full stop
+   — goes straight to a `com-localizacao/` review folder.
+2. **A narrow, trustworthy date range among "siblings."** Files that came
+   out of the *same source zip* as an undated file often include some
+   photos that *did* have a real EXIF or filename date. If those dates
+   cluster into a narrow span (a real photo session, not decades), that's
+   a reasonable era estimate for the undated file too — filed into
+   `por-epoca-aproximada/<year>/`.
+3. **Nothing.** Filed into `sem-pista/` for manual review, still separated
+   from the pure junk by the resolution floor (`--min-megapixels`, default
+   1.0) so at least you're not scrolling through icons.
+
+This is deliberately conservative — it recovers candidates for a human to
+confirm, not a final answer. In one real run it separated ~1,900 likely
+real photos out of a pile of several thousand.
 
 ## Lessons learned
 
@@ -243,6 +296,33 @@ you're tempted to skip a step:
   delete something instead moves it to a review directory you choose.
   Disk is cheap; a wrongly-deleted-and-recompressed-away photo isn't
   coming back.
+- **Filename-based dedup misses forwarded messaging photos entirely.**
+  `dedupe_visual.py` only compares files that already share a base name
+  (`IMG_5353.jpg` vs `IMG_5353(1).jpg`) — cheap, and correct for exports,
+  where a re-encoded duplicate always keeps some trace of the original
+  name. But a photo forwarded through WhatsApp/Telegram gets a *fresh
+  random UUID every single hop*, so there's no shared name to group by,
+  even though the image itself is unchanged or barely re-compressed.
+  `dedupe_visual_global.py` compares every image in a folder against
+  every other one instead of relying on names — O(n²), but a perceptual
+  hash comparison is just a XOR and a popcount, so it's still fast (~4s
+  for 5,600 files, 15.7M comparisons) unless you're into six figures of
+  files, at which point run it per-subfolder instead of on the whole tree.
+  On a real pile of ~5,600 messaging-app photos this found ~1,700
+  duplicates — one in three files — that the filename-based pass would
+  never have caught.
+- **A single corrupted camera-clock date can wreck a whole date-range
+  estimate.** When guessing an undated photo's era from its "siblings" in
+  the same source zip (`recover_undated_photos.py`), a naive min/max over
+  their dates gets dragged to whatever garbage date one mis-set camera
+  clock produced (we saw a stray "2001" in an otherwise-2016 batch).
+  Trim the extremes (2nd–98th percentile) before taking the range. Even
+  trimmed, some zips (Apple's `iCloud Photos Part N of M.zip`) are just an
+  arbitrary slice of the *entire* library, not a single session — their
+  "siblings" span decades and any range from them is meaningless. Add a
+  sanity cap on the range width itself (`--max-range-months`, default 48)
+  and discard the estimate entirely if the range is wider than that,
+  rather than reporting a multi-decade guess as if it meant something.
 
 ## Wiring it into Immich
 
@@ -300,6 +380,8 @@ happened with a text editor or `csvkit`/`pandas`:
 | `exif-cache.json` | `organize.py` | raw exiftool output, reused on re-runs |
 | `live-photos.csv` | `live_photos.py` | HEIC/MOV pairs and what was done to keep them together |
 | `near-duplicates.csv` | `dedupe_visual.py` | every compared pair + perceptual hash distance |
+| *(review-dir tree)* | `dedupe_visual_global.py` | no CSV — the smaller file(s) of each duplicate cluster are moved into `<review-dir>`, mirroring their original relative path |
+| *(review-dir tree)* | `recover_undated_photos.py` | no CSV — recovered files are moved into `<review-dir>/com-localizacao`, `por-epoca-aproximada/<year>`, or `sem-pista` |
 | `conflicts.csv` | `resolve_conflicts.py` | same-timestamp groups and which copy was kept |
 | `albums.csv` | `albums.py` | photo → album membership, for later import |
 | `photoslibrary-internals.csv` | `detect_photoslibrary_internals.py` | orphaned Live Photo videos from a raw `.photoslibrary` sync, and whether a timestamp match was found |
