@@ -116,7 +116,9 @@ python3 dedupe_video.py --root /mnt/photo-library/by-date --review-dir /mnt/phot
 python3 resolve_conflicts.py --root /mnt/photo-library/by-date --exif-cache ../reports/exif-cache.json --organized ../reports/organized.csv --report ../reports/conflicts.csv --review-dir /mnt/photo-library/review-conflicts
 
 # 6. Sanity-check a random sample before you trust the result.
-python3 validate_sample.py --manifest ../reports/manifest.csv --sample-size 100
+#    --organized makes it check the CURRENT (post-organize.py) path
+#    instead of the pre-organize extraction path.
+python3 validate_sample.py --manifest ../reports/manifest.csv --organized ../reports/organized.csv --sample-size 100
 ```
 
 Then point Immich at `/mnt/photo-library/by-date` as a **read-only External
@@ -204,6 +206,23 @@ you're tempted to skip a step:
 5. If you later fix dates (`fix_mtime.py`, or manually), trigger a re-scan
    from the same Libraries page so Immich re-reads the updated metadata —
    it won't pick up filesystem changes automatically.
+
+## Testing it yourself
+
+`test-data/generate_dataset.py` builds a small synthetic dataset (a
+handful of tiny JPGs, two fake export zips) covering every edge case this
+README mentions — EXIF dates, filename-only dates in several formats,
+a cross-source content duplicate, a same-timestamp conflict at two
+resolutions, a Live Photo pair, and a real Google Photos album folder.
+Good for a quick end-to-end smoke test after changing anything:
+
+```bash
+cd test-data && python3 generate_dataset.py && cd ../src
+python3 inventory.py --root a=../test-data/source-a --root b=../test-data/source-b --output ../test-data/reports/inventory.csv
+python3 extract.py --inventory ../test-data/reports/inventory.csv --dest ../test-data/dest --reports-dir ../test-data/reports
+python3 organize.py --manifest ../test-data/reports/manifest.csv --dest ../test-data/dest --reports-dir ../test-data/reports
+# ...and so on, same as the Quickstart above but pointed at test-data/.
+```
 
 ## Reports directory
 

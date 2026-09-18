@@ -59,19 +59,27 @@ def validate_structure(path, ext):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--manifest", required=True)
+    ap.add_argument("--manifest", required=True, help="manifest.csv produzido por extract.py (fonte de sha256/tamanho)")
+    ap.add_argument("--organized", help="organized.csv produzido por organize.py - se passado, valida no caminho ATUAL "
+                                         "(depois de organizado), em vez do caminho de extract.py que pode ja ter sido movido")
     ap.add_argument("--sample-size", type=int, default=60)
     args = ap.parse_args()
 
     with open(args.manifest, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
+    current_path_by_sha = {}
+    if args.organized:
+        with open(args.organized, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                current_path_by_sha[r["sha256"]] = r["new_path"]
+
     sample = random.sample(rows, min(args.sample_size, len(rows)))
     ok = fail = 0
     failures = []
 
     for row in sample:
-        path = row["output_path"] if "output_path" in row else row["new_path"]
+        path = current_path_by_sha.get(row["sha256"], row["output_path"])
         expected_size = int(row["size_bytes"]) if "size_bytes" in row else None
         expected_sha = row["sha256"]
         ext = path.rsplit(".", 1)[-1] if "." in path else ""
