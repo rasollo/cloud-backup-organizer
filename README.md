@@ -39,6 +39,10 @@ export zips (iCloud / Google Takeout / OneDrive, on N drives)
  9. albums.py         (optional) build an album-membership manifest from
                        Google Takeout's folder structure, for later import
                        into a tool that manages albums itself
+10. detect_photoslibrary_internals.py  (optional) if a source export is
+                       actually a raw sync of a macOS *.photoslibrary
+                       package rather than a proper export, separate out
+                       its unpairable internal Live Photo video files
         │
         ▼
    by-date/YYYY/MM/... ──────► point Immich's External Library at this
@@ -115,6 +119,10 @@ python3 dedupe_visual.py --root /mnt/photo-library/by-date --report ../reports/n
 python3 dedupe_video.py --root /mnt/photo-library/by-date --review-dir /mnt/photo-library/review-video-dupes
 python3 resolve_conflicts.py --root /mnt/photo-library/by-date --exif-cache ../reports/exif-cache.json --organized ../reports/organized.csv --report ../reports/conflicts.csv --review-dir /mnt/photo-library/review-conflicts
 
+# Only if a source export turned out to be a raw *.photoslibrary sync
+# (see "Lessons learned" below):
+python3 detect_photoslibrary_internals.py --manifest ../reports/manifest.csv --organized ../reports/organized.csv --review-dir /mnt/photo-library/review-unpaired-live-videos --report ../reports/photoslibrary-internals.csv
+
 # 6. Sanity-check a random sample before you trust the result.
 #    --organized makes it check the CURRENT (post-organize.py) path
 #    instead of the pre-organize extraction path.
@@ -178,6 +186,20 @@ you're tempted to skip a step:
   upload location at it — no POSIX permissions, no hard links, chown fails
   outright. Keep app data on a native filesystem (ext4, APFS, NTFS) and use
   exFAT only for the read-only photo library itself.
+- **A synced `.photoslibrary` folder isn't an export.** If someone backed
+  up the raw `Pictures/*.photoslibrary` package (e.g. via a generic Drive
+  or OneDrive folder sync) instead of using Photos.app's "Export", you'll
+  find files like `jpegvideocomplement_7c18.mov` and
+  `fullsizeoutput_7cff.jpeg` — Photos.app's *internal* names for a Live
+  Photo's video half and its rendered still. These are legitimate content,
+  but the two only correlate through Photos.app's internal SQLite
+  database, which isn't part of the backup — filenames don't match, and in
+  practice neither do timestamps (we found videos and their likely photo
+  in the same folder off by 8+ minutes, not the same second). Don't expect
+  `live_photos.py`-style filename pairing to work here;
+  `detect_photoslibrary_internals.py` at least tries a timestamp match and
+  is honest about it usually finding nothing, separating the orphaned
+  videos out so they don't clutter browsing the real library.
 - **A "review" folder beats a `rm`.** Every step that would otherwise
   delete something instead moves it to a review directory you choose.
   Disk is cheap; a wrongly-deleted-and-recompressed-away photo isn't
@@ -241,6 +263,7 @@ happened with a text editor or `csvkit`/`pandas`:
 | `near-duplicates.csv` | `dedupe_visual.py` | every compared pair + perceptual hash distance |
 | `conflicts.csv` | `resolve_conflicts.py` | same-timestamp groups and which copy was kept |
 | `albums.csv` | `albums.py` | photo → album membership, for later import |
+| `photoslibrary-internals.csv` | `detect_photoslibrary_internals.py` | orphaned Live Photo videos from a raw `.photoslibrary` sync, and whether a timestamp match was found |
 
 ## License
 
