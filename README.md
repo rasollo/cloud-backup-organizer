@@ -30,6 +30,10 @@ export zips (iCloud / Google Takeout / OneDrive, on N drives)
  4. fix_mtime.py      sync filesystem mtime so tools without EXIF-reading
         │             (some viewers) show the right date
         ▼
+ 4b. write_exif_dates.py  write the filename-derived date as REAL EXIF
+        │             into files that never had any - makes the date
+        │             permanent, immune to a viewer re-scanning the file
+        ▼
  5. live_photos.py    keep HEIC+MOV Live Photo pairs together
  6. dedupe_visual.py  catch near-duplicate photos (same shot, re-compressed
                        by a different export pipeline)
@@ -113,6 +117,11 @@ python3 organize.py \
 #    (harmless but recommended - see "Why mtime matters" below).
 python3 fix_mtime.py --organized ../reports/organized.csv
 
+# 4b. Make it permanent: write the same date as real EXIF into files
+#     that never had any (see "Why mtime matters" for why this matters
+#     beyond what fix_mtime.py already does).
+python3 write_exif_dates.py --manifest ../reports/manifest.csv --organized ../reports/organized.csv
+
 # 5. Optional cleanup passes, in any order you like:
 python3 live_photos.py --manifest ../reports/manifest.csv --organized ../reports/organized.csv --reports-dir ../reports
 python3 dedupe_visual.py --root /mnt/photo-library/by-date --report ../reports/near-duplicates.csv --apply --review-dir /mnt/photo-library/review-visual-dupes
@@ -147,6 +156,21 @@ them, their filesystem `mtime` is just "whenever the script touched the
 file" — today, not 2017. Immich (and some other tools) fall back to mtime
 for exactly these EXIF-less files. Run `fix_mtime.py` or you'll see today's
 date on every screenshot you own.
+
+`fix_mtime.py` alone isn't the end of the story, though: an **external
+library** gets periodically re-scanned, and on each scan Immich re-derives
+each asset's date from the file. For a file with real EXIF that's a
+no-op — it just reads the same value again. For a file with no EXIF,
+there's nothing stable to re-derive, so anything you edited by hand in
+Immich's own UI for that asset gets silently reverted on the next scan
+(we watched this happen: a manual date edit reverted the instant we
+tried it, no scan needed to trigger it — Immich just doesn't persist an
+edit for an asset it doesn't consider itself to own). `mtime` isn't part
+of what gets re-derived and displayed the same way EXIF is, so it's a
+half-measure. `write_exif_dates.py` is the real fix: it writes the
+filename-derived date as actual EXIF tags into the file, at which point
+it behaves exactly like a native EXIF file — permanent, and immune to
+every future re-scan.
 
 ## Lessons learned
 
@@ -200,6 +224,21 @@ you're tempted to skip a step:
   `detect_photoslibrary_internals.py` at least tries a timestamp match and
   is honest about it usually finding nothing, separating the orphaned
   videos out so they don't clutter browsing the real library.
+- **exiftool's `-@` argfile needs `-execute` between files, or every file
+  gets the LAST one's values.** Writing different metadata to different
+  files in one `exiftool -@ argfile` call looks like it should work if you
+  just repeat `-TAG=value ... file` blocks one after another — it doesn't.
+  Without an `-execute` line between blocks, exiftool parses the *entire*
+  argfile as one command: every `-TAG=value` setting accumulates (the last
+  one for a given tag wins), and *that* final set of values gets applied
+  to every file argument in the file, regardless of which block it came
+  from. We caught this because a live run got killed partway through and
+  every file touched so far had the same (wrong) date - the date meant for
+  whichever file was last in the batch at that point. `write_exif_dates.py`
+  puts `-execute` after every file's block for exactly this reason. If
+  you're scripting exiftool with per-file arguments some other way, test
+  it on three throwaway files first and check all three came out
+  different, not just that the command exited 0.
 - **A "review" folder beats a `rm`.** Every step that would otherwise
   delete something instead moves it to a review directory you choose.
   Disk is cheap; a wrongly-deleted-and-recompressed-away photo isn't
