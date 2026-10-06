@@ -34,6 +34,11 @@ WA_SEQ_RE = re.compile(r"^[-_]?WA\d+", re.I)
 
 AMPM_RE = re.compile(r"^\s?(AM|PM)", re.I)
 
+# "15-01-05_0113.jpg": DD-MM-YY_HHMM de celulares antigos (2004-2006),
+# sem EXIF nenhum. Ano com 2 digitos e ambiguo (podia ser YY-MM-DD), entao
+# so aceita o nome INTEIRO nesse formato - nunca como trecho de outro nome.
+SHORT_DMY_RE = re.compile(r"^(\d{2})-(\d{2})-(\d{2})_(\d{2})(\d{2})(?:\(\d+\))?\.[A-Za-z0-9]+$")
+
 
 def extract_datetime_from_filename(name, max_year=None):
     """Extrai (ano, mes, dia, hora, min, seg) do nome de um arquivo, ou
@@ -41,6 +46,13 @@ def extract_datetime_from_filename(name, max_year=None):
     export de foto/video: YYYYMMDD, YYYY-MM-DD, com ou sem hora, em varios
     idiomas e convencoes (WhatsApp, screenshots, camera)."""
     max_year = max_year or (CURRENT_YEAR + 1)
+    short = SHORT_DMY_RE.match(name)
+    if short:
+        d, mo, yy, h, mi = (int(g) for g in short.groups())
+        y = 2000 + yy
+        if y <= max_year and 1 <= mo <= 12 and 1 <= d <= 31 and h <= 23 and mi <= 59:
+            return (y, mo, d, h, mi, 0)
+        return None
     m = DATE_RE.search(name)
     if not m:
         return None

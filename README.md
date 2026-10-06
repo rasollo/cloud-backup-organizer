@@ -242,7 +242,10 @@ you're tempted to skip a step:
   suffixes that need 12→24h conversion, WhatsApp's `-WA0054` sequence
   number that looks exactly like a glued-on time but isn't, and
   `YYYYMMDD_HHMMSSmmm` timestamps with no separator at all between date and
-  time. `common.py`'s `extract_datetime_from_filename()` handles all of
+  time, and old camera phones (2004–2006) that wrote no EXIF and named
+  files `DD-MM-YY_HHMM.jpg` (2-digit year, day first — only accepted when
+  it's the *whole* filename, since `YY-MM-DD` would look identical).
+  `common.py`'s `extract_datetime_from_filename()` handles all of
   these — extend the regexes there, not in five different scripts.
 - **A collision-suffixed pair (`name.jpg` / `name__abcd1234.jpg`) is
   *never* an exact duplicate** — if the content hash matched, `extract.py`
