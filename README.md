@@ -11,6 +11,9 @@ drives, a couple of TB of iCloud/Google/OneDrive history going back to the
 2000s, and every date-naming edge case those exports throw at you. Every
 script here reflects a real bug we hit and fixed — see
 [Lessons learned](#lessons-learned) before you trust any of this blindly.
+What's still done by hand (checking old backups before deleting them,
+review pages, Immich's trash) and where this is heading is in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What it does
 
@@ -160,6 +163,19 @@ python3 recover_undated_photos.py \
 python3 dedupe_visual_global.py \
   --root /mnt/photo-library/review-recovered \
   --review-dir /mnt/photo-library/review-recovered/_duplicatas-internas
+
+# 8. Recommended before step 7: recover real dates (and GPS/captions) for
+#    the undated pile from the metadata Google Takeout and iCloud ship
+#    *next to* the photos (see "Dates hiding in the export's sidecar files"
+#    below). Same --root list as step 1. scan only reads; apply simulates
+#    unless you pass --execute.
+python3 sidecar_metadata.py scan \
+  --root icloud=/mnt/backup1 --root google=/mnt/backup2 \
+  --manifest ../reports/manifest.csv --duplicates ../reports/duplicates.csv \
+  --target /mnt/photo-library/by-date/sem-data \
+  --report ../reports/sidecar-metadata.csv
+python3 sidecar_metadata.py apply --report ../reports/sidecar-metadata.csv \
+  --dest /mnt/photo-library/by-date --log ../reports/sidecar-apply.csv --execute
 ```
 
 Then point Immich at `/mnt/photo-library/by-date` as a **read-only External
@@ -224,6 +240,33 @@ weak signals, from most to least trustworthy:
 This is deliberately conservative — it recovers candidates for a human to
 confirm, not a final answer. In one real run it separated ~1,900 likely
 real photos out of a pile of several thousand.
+
+## Dates hiding in the export's sidecar files
+
+A photo with no EXIF isn't necessarily undated: both big exporters ship
+the metadata they hold *outside* the file.
+
+- **Google Takeout** writes one `.json` per photo with `photoTakenTime`,
+  `geoData`/`geoDataExif`, `description` and `favorited`.
+- **iCloud** puts a `Photo Details.csv` (plus `-1`, `-2`... ) in each
+  `iCloud Photos Part N of M.zip`, with `originalCreationDate` and
+  `favorite` for every photo in that part.
+
+`sidecar_metadata.py scan` finds each undated file's original location in
+the exports by content hash (`manifest.csv`/`duplicates.csv`), looks up
+its `.json`/CSV row, and writes a report; `apply` writes what was found
+into the file — EXIF for JPEG/HEIC, XMP for PNG/GIF, QuickTime tags for
+video — never overwriting a tag the file already has, sets the file's
+mtime to the same date, and moves it into `by-date/YYYY/MM/`. The move log
+is written line by line *before* each move, so an interrupted run can
+still be undone.
+
+In one real run this gave a date to ~18,000 of ~25,500 files that had been
+written off as undated. Expect the date and little else: only 28 of them
+had GPS in the `.json`, because Google's `geoDataExif` is mostly a copy of
+the EXIF the file never had. And for messaging-app media the Takeout date
+is when the file *entered Google Photos*, not when it was taken — right
+month, usually, but not necessarily right day.
 
 ## Lessons learned
 
@@ -327,6 +370,28 @@ you're tempted to skip a step:
   and discard the estimate entirely if the range is wider than that,
   rather than reporting a multi-decade guess as if it meant something.
 
+- **Takeout's `.json` is often in a different zip than its photo**, and
+  its name is mangled in three ways: `<name>.supplemental-metadata.json`,
+  truncated to ~46 characters (`<name>.supplemen.json`, or just the start
+  of a long name), and the `(1)` duplicate counter moved *after* the
+  extension (`IMG_1234.jpg(1).json` belongs to `IMG_1234(1).jpg`). Index
+  every `.json` across all parts by its folder inside the zip, and try all
+  those name variants. Comparing each photo against every `.json` in the
+  folder is also far too slow (`Photos from 2019/` alone can hold 20,000);
+  build a dict keyed by the possible names instead.
+- **An iCloud CSV row only describes its own zip.** Matching
+  `IMG_1234.JPG` by name against the CSV of *another* part gives the date
+  of a different photo — iPhone filenames repeat across devices and years.
+  Our first pass did this and produced hundreds of "conflicts" two to seven
+  years apart. `sidecar_metadata.py` only falls back to a name-only match
+  when no trustworthy source exists, and labels it `apple-so-nome`.
+- **Options before `-@` only apply to exiftool's first `-execute`
+  block.** Calling `exiftool -overwrite_original -@ argfile` with
+  `-execute` between files left a `*_original` backup next to every file
+  but the first. Either repeat the option inside each block (as
+  `write_exif_dates.py` does) or put it after `-common_args` at the end of
+  the command line (as `sidecar_metadata.py` does).
+
 ## Wiring it into Immich
 
 1. Add a **read-only** bind mount in `docker-compose.yml` for the
@@ -387,6 +452,8 @@ happened with a text editor or `csvkit`/`pandas`:
 | *(review-dir tree)* | `recover_undated_photos.py` | no CSV — recovered files are moved into `<review-dir>/com-localizacao`, `por-epoca-aproximada/<year>`, or `sem-pista` |
 | `conflicts.csv` | `resolve_conflicts.py` | same-timestamp groups and which copy was kept |
 | `albums.csv` | `albums.py` | photo → album membership, for later import |
+| `sidecar-metadata.csv` | `sidecar_metadata.py scan` | each undated file: date/GPS/caption found and where (`google`, `apple`, `apple-so-nome`, `conflict`, `no-metadata`) |
+| `sidecar-apply.csv` | `sidecar_metadata.py apply` | from → to of every move and which tags were written, to undo |
 | `photoslibrary-internals.csv` | `detect_photoslibrary_internals.py` | orphaned Live Photo videos from a raw `.photoslibrary` sync, and whether a timestamp match was found |
 
 ## License
