@@ -67,6 +67,16 @@ mover os arquivos da lixeira para uma quarentena no mesmo sistema de
 arquivos (`os.rename`, instantâneo), verificar duplicatas, revisar na
 página e só então apagar de vez, devolvendo os marcados como "manter".
 
+Depois virou um job diário (systemd timer, 02:30), lendo o banco do
+Immich só para consulta:
+- asset na lixeira: o arquivo vai para `.lixo-immich/<mesmo caminho>`;
+- asset restaurado no Immich: o arquivo volta para o lugar;
+- apagado de vez depois de 30 dias, ou quando o asset some do Immich,
+  desde que nenhum asset ativo use o mesmo caminho.
+
+Cada ação vai para um CSV antes de acontecer. Com isso o dedup do próprio
+Immich passa a funcionar sobre a biblioteca externa.
+
 ### Copiar o que faltava de volta para o by-date
 Ordem da data: EXIF, `.json` do Takeout ao lado, CSV do iCloud no mesmo
 zip, data no nome do arquivo ou da pasta (`Masters/AAAA/MM/DD/AAAAMMDD-HHMMSS/`
@@ -88,6 +98,55 @@ outro conteúdo, usar o sufixo `_1`.
   contagem mostrada antes.
 - **SMART** antes de confiar num disco antigo para backup (`smartctl -x`):
   setores realocados e pendentes, e `Load_Cycle_Count` em HD de notebook.
+
+### Metadados com exiftool
+- **Vídeo e `-api QuickTimeUTC`**: com essa opção o exiftool converte de
+  hora local para UTC ao gravar. Passe a hora local **com fuso**
+  (`2020:01:01 12:00:00-03:00`). Passar a hora já em UTC sem fuso faz a
+  conversão duas vezes, e o `QuickTime:CreateDate` fica adiantado pelo
+  fuso. O Immich não percebe, porque lê antes o `Keys:CreationDate`, mas
+  outros apps percebem.
+- **GPS de vídeo** vai separado por vírgula: `"lat, lon, alt"`. Separado
+  por espaço, o exiftool rejeita.
+- **Extensão errada** (JPEG salvo como `.PNG`, MP4 como `.mov`, BMP): o
+  exiftool se recusa a gravar e só avisa. Releia depois de gravar e conte o
+  que continua sem data. Corrija a extensão (ou recodifique, guardando o
+  original) e grave de novo.
+- **Argfile** (`-@ -`): cada linha é um argumento. Uma descrição com
+  quebra de linha vira outro argumento. Opções antes de `-@` só valem para
+  o primeiro bloco `-execute`; para todos, use `-common_args`. Sem isso
+  sobram arquivos `*_original`.
+- **`-n` ignora `-d`**: com `-n` as datas voltam como
+  `AAAA:MM:DD HH:MM:SS`, independentemente do formato pedido.
+- **Data do Takeout em mídia de mensageiro** é a data em que entrou no
+  Google Fotos. Se o nome do arquivo tem data (`IMG-20170927-WA0001`),
+  prefira a do nome.
+
+## Lições de operação (continuação)
+
+- **Três discos, três papéis**:
+  - produção: o que o Immich lê;
+  - backup: snapshots diários com `rsync --link-dest`, 14 diários + 1 por
+    mês durante 12 meses;
+  - cópia fria: espelho do que é insubstituível, `noauto,nofail` no fstab,
+    para desligar fisicamente.
+
+  Monte por `LABEL=` no fstab, não por `/dev/sdX`, que muda quando se troca
+  a porta ou o cabo.
+- **rsync**: o código 24 (arquivo sumiu durante a cópia) é normal com o
+  sistema em uso. O código 23 costuma ser um arquivo de root com modo
+  `000`, então o backup roda como root. Não copie o banco do Postgres
+  cru; use os dumps diários do próprio Immich.
+- **Processo longo**: use `setsid nohup ... & disown`, porque `nohup`
+  sozinho morreu com o reinício da sessão. Para esperar outro processo,
+  use `kill -0 PID`; `pgrep -f padrão` acha o próprio `sh -c` que contém o
+  padrão e nunca termina.
+- **Não edite um script bash enquanto ele roda**: o bash lê o arquivo aos
+  poucos. Escreva um arquivo novo e faça `mv`.
+- **Mídia de WhatsApp em backup do iCloud Drive**: compare por imagem
+  (miniatura) e por duração de vídeo. Revise por conversa, com botões
+  "conversa inteira" e "inverter seleção" (muitas vezes só se quer uma
+  foto).
 
 ## Ideias para o software
 

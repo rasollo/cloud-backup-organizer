@@ -65,7 +65,7 @@ REPORT_FIELDS = ["status", "path", "sha256", "date", "source", "gps", "descripti
 
 def nucleo_json(nome):
     """nome do arquivo de midia a que um .json do Takeout se refere (pode vir truncado)."""
-    s = re.sub(r"\.su[a-z-]*(\(\d+\))?$", lambda m: m.group(1) or "", nome[:-5])
+    s = re.sub(r"\.s(?:u[a-z-]*)?(\(\d+\))?$", lambda m: m.group(1) or "", nome[:-5])
     return s.rstrip(".")
 
 
@@ -238,8 +238,10 @@ def tags(ext, quando, gps, descricao, tem):
     local = quando.strftime("%Y:%m:%d %H:%M:%S")
     if "date" not in tem:
         if ext in VIDEO:
-            utc = quando.astimezone(datetime.timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
-            a += [f"-QuickTime:CreateDate={utc}", f"-QuickTime:ModifyDate={utc}", f"-Keys:CreationDate={local}{off}"]
+            # com -api QuickTimeUTC o exiftool converte para UTC sozinho: passar a hora local com fuso.
+            # Passar a hora ja em UTC sem fuso faz ele converter de novo (ficava 3 h adiantado no Brasil)
+            a += [f"-QuickTime:CreateDate={local}{off}", f"-QuickTime:ModifyDate={local}{off}",
+                  f"-Keys:CreationDate={local}{off}"]
         elif ext in XMP_ONLY:
             a += [f"-XMP-exif:DateTimeOriginal={local}{off}", f"-XMP-xmp:CreateDate={local}{off}"]
         else:
@@ -247,7 +249,7 @@ def tags(ext, quando, gps, descricao, tem):
     if gps and "gps" not in tem:
         lat, lon, alt = (float(x) for x in gps.split(","))
         if ext in VIDEO:
-            a += [f"-Keys:GPSCoordinates={lat} {lon} {alt}", f"-UserData:GPSCoordinates={lat} {lon} {alt}"]
+            a += [f"-Keys:GPSCoordinates={lat}, {lon}, {alt}", f"-UserData:GPSCoordinates={lat}, {lon}, {alt}"]
         else:
             g = "XMP-exif" if ext in XMP_ONLY else "EXIF"
             a += [f"-{g}:GPSLatitude={abs(lat)}", f"-{g}:GPSLatitudeRef={'N' if lat >= 0 else 'S'}",
@@ -255,6 +257,7 @@ def tags(ext, quando, gps, descricao, tem):
             if alt:
                 a += [f"-{g}:GPSAltitude={abs(alt)}", f"-{g}:GPSAltitudeRef={0 if alt >= 0 else 1}"]
     if descricao and "description" not in tem:
+        descricao = " ".join(descricao.split())  # quebra de linha no argfile do exiftool viraria outro argumento
         a += [f"-XMP-dc:Description={descricao}"] + ([] if ext in XMP_ONLY | VIDEO else [f"-EXIF:ImageDescription={descricao}"])
     return a
 
@@ -325,6 +328,12 @@ def apply(args):
             # opcoes antes de -@ so valem para o 1o bloco; -common_args repete em todos
             subprocess.run(["exiftool", "-@", "-", "-common_args", "-q", "-m", "-overwrite_original", "-api", "QuickTimeUTC"],
                            input="\n".join(linhas), text=True)
+    # o exiftool recusa gravar quando a extensao nao bate com o conteudo (JPEG salvo como .PNG,
+    # MP4 como .mov) e so avisa: conferir o que ficou sem data depois de gravar
+    depois = ja_tem([alvo for _, _, alvo, t in mover if t])
+    sem = [alvo for _, _, alvo, t in mover if t and any("Date" in x for x in t) and "date" not in depois.get(alvo, set())]
+    if sem:
+        print(f"ATENCAO: {len(sem)} arquivos continuam sem data (extensao errada?), ex.: {sem[:3]}")
     for quando, r, alvo, t in mover:
         # mtime = data achada: reserva para quem nao ler o metadado gravado
         os.utime(alvo, (quando.timestamp(), quando.timestamp()))
